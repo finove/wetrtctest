@@ -15,10 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
 	"github.com/pion/webrtc/v3/pkg/media/ivfreader"
+	"github.com/pion/webrtc/v3/pkg/media/ivfwriter"
 	"github.com/pion/webrtc/v3/pkg/media/oggreader"
+	"github.com/pion/webrtc/v3/pkg/media/oggwriter"
 )
 
 // Allows compressing offer/answer to bypass terminal input limits.
@@ -198,5 +201,39 @@ OUT:
 		}
 	}
 	log.Printf("video done %v", err)
+	return
+}
+
+func SaveRemoteTrack(fileName string, track *webrtc.TrackRemote) {
+	codec := track.Codec()
+	if strings.EqualFold(codec.MimeType, webrtc.MimeTypeOpus) {
+		i, oggNewErr := oggwriter.New(fileName+".opus", codec.ClockRate, codec.Channels)
+		if oggNewErr == nil {
+			saveMediaToDisk(i, track)
+		}
+	} else if strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) {
+		i2, ivfNewErr := ivfwriter.New(fileName + ".ivf")
+		if ivfNewErr == nil {
+			saveMediaToDisk(i2, track)
+		}
+	}
+}
+
+func saveMediaToDisk(i media.Writer, track *webrtc.TrackRemote) (err error) {
+	var rtpPacket *rtp.Packet
+	defer func() {
+		if err = i.Close(); err != nil {
+			return
+		}
+	}()
+	for {
+		rtpPacket, _, err = track.ReadRTP()
+		if err != nil {
+			break
+		}
+		if err = i.WriteRTP(rtpPacket); err != nil {
+			break
+		}
+	}
 	return
 }

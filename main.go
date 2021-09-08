@@ -3,14 +3,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/finove/webrtctest/client"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
-	"github.com/pion/webrtc/v3/pkg/media"
-	"github.com/pion/webrtc/v3/pkg/media/ivfreader"
 )
 
 func main() {
@@ -60,24 +59,17 @@ func main() {
 
 	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		codec := track.Codec()
+		go func() {
+			ticker := time.NewTicker(time.Second * 3)
+			for range ticker.C {
+				errSend := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
+				if errSend != nil {
+					fmt.Println(errSend)
+				}
+			}
+		}()
 		log.Printf("got codec %s", codec.MimeType)
-		// go func() {
-		// 	ticker := time.NewTicker(time.Second * 3)
-		// 	for range ticker.C {
-		// 		errSend := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
-		// 		if errSend != nil {
-		// 			fmt.Println(errSend)
-		// 		}
-		// 	}
-		// }()
-		log.Printf("Track has started, of type %d:%s", track.PayloadType(), track.Codec().RTPCodecCapability.MimeType)
-		// for {
-		// 	rtp, _, readErr := track.ReadRTP()
-		// 	if readErr != nil {
-		// 		panic(readErr)
-		// 	}
-		// 	log.Printf("get rtp %d", rtp.SequenceNumber)
-		// }
+		SaveRemoteTrack("out3", track)
 	})
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 
@@ -110,11 +102,10 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("local %s sdp %s", offer.Type.String(), offer.SDP)
+		// log.Printf("local %s sdp %s", offer.Type.String(), offer.SDP)
 		gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 		peerConnection.SetLocalDescription(offer)
 		<-gatherComplete
-		log.Println(Encode(*peerConnection.LocalDescription()))
 		// wait anser
 		answer := webrtc.SessionDescription{}
 		// Decode(MustReadStdin(), &answer)
@@ -127,23 +118,9 @@ func main() {
 		answer.Type = webrtc.SDPTypeAnswer
 		peerConnection.SetRemoteDescription(answer)
 
-		go func() {
-			file, herr := os.Open("output.ivf")
-			if herr != nil {
-				panic(herr)
-			}
-			hvio, _, herr := ivfreader.NewWith(file)
-			if herr != nil {
-				panic(herr)
-			}
-			// wait
-			<-iceConnectedCtx.Done()
-			ticker := time.NewTicker(300 * time.Millisecond)
-			for range ticker.C {
-				sss, _, _ := hvio.ParseNextFrame()
-				vp8Track.WriteSample(media.Sample{Data: sss, Duration: time.Second})
-			}
-		}()
+		<-iceConnectedCtx.Done()
+		go SendVP8Video(context.Background(), "out3.ivf", vp8Track)
+		go SendOggAudio(context.Background(), "out3.opus", audioTrack)
 
 	} else {
 
